@@ -167,6 +167,80 @@ app.get('/api/bookings/:id', verifyToken, async (req, res) => {
   }
 });
 
+// @route   PATCH /api/bookings/:id/cancel
+// @desc    Customer cancel kore -> sudhu owner, sudhu status requested thakle
+app.patch('/api/bookings/:id/cancel', verifyToken, verifyCustomer, async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    // sudhu owner customer cancel kore dekhbe
+    if (booking.customerEmail !== req.user.email) {
+      return res.status(403).json({ message: 'Forbidden: You are not the owner of this booking' });
+    }
+
+    // status requested thakle e target
+    if (booking.status !== 'requested') {
+      return res.status(400).json({ message: 'Booking can only be cancelled when status is requested' });
+    }
+
+    booking.status = 'cancelled';
+    await booking.save();
+
+    res.json(booking);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   PATCH /api/bookings/:id/status
+// @desc    Technician status update kore (owner)
+app.patch('/api/bookings/:id/status', verifyToken, verifyTechnician, async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    // suddu owner technician update kore dekhbe
+    if (booking.technicianEmail !== req.user.email) {
+      return res.status(403).json({ message: 'Forbidden: You are not the owner technician of this booking' });
+    }
+
+    const newStatus = req.body.status;
+
+    // Allowed transitions
+    const validTransitions = {
+      requested: { accepted: true, rejected: true },
+      accepted: { 'in-progress': true },
+      'in-progress': { completed: true },
+    };
+
+    const validNexts = validTransitions[booking.status] || {};
+
+    // Onno transition -> 400
+    if (!validNexts[newStatus]) {
+      return res.status(400).json({ message: 'Invalid status transition' });
+    }
+
+    // completed lagbe finalAmount > 0
+    if (newStatus === 'completed') {
+      if (!booking.finalAmount || booking.finalAmount <= 0) {
+        return res.status(400).json({ message: 'finalAmount must be greater than 0 to complete the service' });
+      }
+    }
+
+    booking.status = newStatus;
+    await booking.save();
+
+    res.json(booking);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
 // @route   GET /api/services
 // @desc    Public -> filtering + pagination (approvalStatus approved + isAvailable true)
 app.get('/api/services', async (req, res) => {
