@@ -2,7 +2,8 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 require('dotenv').config();
-const { verifyToken, verifyTechnician } = require('./middlewares/auth');
+const { verifyToken, verifyCustomer, verifyTechnician } = require('./middlewares/auth');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -236,6 +237,59 @@ app.patch('/api/bookings/:id/status', verifyToken, verifyTechnician, async (req,
     await booking.save();
 
     res.json(booking);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   POST /api/payments/create-checkout-session
+// @desc    Stripe Checkout Session create -> booking completed + unpaid + customer owner check
+app.post('/api/payments/create-checkout-session', verifyToken, verifyCustomer, async (req, res) => {
+  try {
+    const { bookingId } = req.body;
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    // booking completed + payment unpaid + customer owner check
+    if (booking.status !== 'completed') {
+      return res.status(400).json({ message: 'Booking must be completed before payment' });
+    }
+    if (booking.paymentStatus !== 'unpaid') {
+      return res.status(400).json({ message: 'Payment already processed' });
+    }
+    if (booking.customerEmail !== req.user.email) {
+      return res.status(403).json({ message: 'Forbidden: You are not the owner of this booking' });
+    }
+
+    // Stripe Checkout Session
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: booking.serviceTitle,
+            },
+            unit_amount: booking.finalAmount * 100, // amount in cents
+          },
+          quantity: 1,
+        },
+      ],
+      mode: 'payment',
+      success_url: `${process.env.FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.FRONTEND_URL}/payment/cancel`,
+      metadata: {
+        bookingId: booking._id.toString(),
+        customerEmail: booking.customerEmail,
+      },
+    });
+
+    // URL return
+    res.json({ url: session.url });
   } catch (err) {
     res.status(500).json({ message: 'Server error', error: err.message });
   }
