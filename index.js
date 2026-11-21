@@ -19,6 +19,11 @@ mongoose
 
 // Services Schema & Model
 const serviceSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  description: { type: String, default: '' },
+  category: { type: String, default: '' },
+  serviceMode: { type: String, default: '' },
+  price: { type: Number, default: 0 },
   technicianName: { type: String, required: true },
   technicianEmail: { type: String, required: true },
   approvalStatus: { type: String, default: 'pending' },
@@ -46,11 +51,57 @@ app.post('/api/services', verifyToken, verifyTechnician, async (req, res) => {
 });
 
 // @route   GET /api/services
-// @desc    Public -> sudhu approvalStatus approved + isAvailable true
+// @desc    Public -> filtering + pagination (approvalStatus approved + isAvailable true)
 app.get('/api/services', async (req, res) => {
   try {
-    const services = await Service.find({ approvalStatus: 'approved', isAvailable: true });
-    res.json(services);
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const filter = { approvalStatus: 'approved', isAvailable: true };
+
+    // search -> title / category te regex (case-insensitive)
+    const search = req.query.search;
+    if (search) {
+      filter.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { category: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    // category filter
+    if (req.query.category) {
+      filter.category = req.query.category;
+    }
+
+    // serviceMode filter
+    if (req.query.serviceMode) {
+      filter.serviceMode = req.query.serviceMode;
+    }
+
+    // sort: price-low, price-high, newest
+    const sortOption = {};
+    if (req.query.sort === 'price-low') {
+      sortOption.price = 1;
+    } else if (req.query.sort === 'price-high') {
+      sortOption.price = -1;
+    } else {
+      sortOption.createdAt = -1; // default: newest
+    }
+
+    const total = await Service.countDocuments(filter);
+    const services = await Service.find(filter)
+      .sort(sortOption)
+      .skip(skip)
+      .limit(limit);
+
+    res.json({
+      services,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    });
   } catch (err) {
     res.status(500).json({ message: 'Server error', error: err.message });
   }
