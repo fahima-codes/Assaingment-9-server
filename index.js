@@ -54,6 +54,24 @@ const bookingSchema = new mongoose.Schema({
 
 const Booking = mongoose.model('Booking', bookingSchema);
 
+// Payment Schema & Model
+const paymentSchema = new mongoose.Schema({
+  bookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Booking', required: true },
+  serviceTitle: { type: String, required: true },
+  customerName: { type: String, default: '' },
+  customerEmail: { type: String, required: true },
+  technicianName: { type: String, default: '' },
+  technicianEmail: { type: String, default: '' },
+  amount: { type: Number, required: true },
+  currency: { type: String, default: 'usd' },
+  transactionId: { type: String, default: '' },
+  stripeSessionId: { type: String, required: true },
+  paymentStatus: { type: String, default: 'paid' },
+  paidAt: { type: Date, default: Date.now },
+});
+
+const Payment = mongoose.model('Payment', paymentSchema);
+
 // @route   POST /api/services
 // @desc    Technician create service kore -> approvalStatus pending
 app.post('/api/services', verifyToken, verifyTechnician, async (req, res) => {
@@ -293,6 +311,87 @@ app.post('/api/payments/create-checkout-session', verifyToken, verifyCustomer, a
   } catch (err) {
     res.status(500).json({ message: 'Server error', error: err.message });
   }
+});
+
+// @route   GET /api/payments/verify?session_id=
+// @desc    Stripe session e payment check -> paid + payment ase ni -> insert + booking e paid koro
+app.get('/api/payments/verify', verifyToken, verifyCustomer, async (req, res) => {
+  try {
+    const { session_id } = req.query;
+
+    const session = await stripe.checkout.sessions.retrieve(session_id);
+
+    if (session.payment_status === 'paid') {
+      const existingPayment = await Payment.findOne({ stripeSessionId: session.id });
+
+      if (!existingPayment) {
+        const booking = await Booking.findById(session.metadata.bookingId);
+
+        const payment = await Payment.create({
+          bookingId: booking._id,
+          serviceTitle: booking.serviceTitle,
+          customerEmail: booking.customerEmail,
+          technicianName: booking.technicianName,
+          technicianEmail: booking.technicianEmail,
+          amount: booking.finalAmount,
+          currency: 'usd',
+          transactionId: session.payment_intent,
+          stripeSessionId: session.id,
+          paymentStatus: 'paid',
+          paidAt: new Date(),
+        });
+
+        await Booking.findByIdAndUpdate(booking._id, { paymentStatus: 'paid' });
+        return res.json({ payment, session });
+      }
+
+      return res.json({ payment: existingPayment, session });
+    }
+
+    res.json({ payment: null, session });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   POST /api/payments/webhook
+// @desc    Stripe webhook -> checkout.session.completed handle -> duplicate save na
+app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    return res.status(400).json({ message: 'Webhook signature verification failed' });
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+
+    const existingPayment = await Payment.findOne({ stripeSessionId: session.id });
+    if (!existingPayment) {
+      const booking = await Booking.findById(session.metadata.bookingId);
+
+      const payment = await Payment.create({
+        bookingId: booking._id,
+        serviceTitle: booking.serviceTitle,
+        customerEmail: booking.customerEmail,
+        technicianName: booking.technicianName,
+        technicianEmail: booking.technicianEmail,
+        amount: booking.finalAmount,
+        currency: 'usd',
+        transactionId: session.payment_intent,
+        stripeSessionId: session.id,
+        paymentStatus: 'paid',
+        paidAt: new Date(),
+      });
+
+      await Booking.findByIdAndUpdate(booking._id, { paymentStatus: 'paid' });
+    }
+  }
+
+  res.json({ received: true });
 });
 
 // @route   GET /api/services
