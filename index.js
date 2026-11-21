@@ -121,6 +121,81 @@ app.get('/api/services/:id', async (req, res) => {
   }
 });
 
+// @route   PATCH /api/services/:id
+// @desc    Owner technician edit kore -> approvalStatus pending
+app.patch('/api/services/:id', verifyToken, verifyTechnician, async (req, res) => {
+  try {
+    const service = await Service.findById(req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+
+    // sudhu owner edit korte parbe
+    if (service.technicianEmail !== req.user.email) {
+      return res.status(403).json({ message: 'Forbidden: You are not the owner of this service' });
+    }
+
+    const updateData = {};
+    if (req.body.title) updateData.title = req.body.title;
+    if (req.body.description) updateData.description = req.body.description;
+    if (req.body.category) updateData.category = req.body.category;
+    if (req.body.serviceMode) updateData.serviceMode = req.body.serviceMode;
+    if (req.body.price) updateData.price = req.body.price;
+
+    // edit korele approval pending hoye jabe
+    updateData.approvalStatus = 'pending';
+
+    const updatedService = await Service.findByIdAndUpdate(req.params.id, updateData, { new: true });
+    res.json(updatedService);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   DELETE /api/services/:id
+// @desc    Owner technician delete kore
+app.delete('/api/services/:id', verifyToken, verifyTechnician, async (req, res) => {
+  try {
+    const service = await Service.findById(req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+
+    // sudhu owner delete korte parbe
+    if (service.technicianEmail !== req.user.email) {
+      return res.status(403).json({ message: 'Forbidden: You are not the owner of this service' });
+    }
+
+    await Service.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Service deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   PATCH /api/services/:id/availability
+// @desc    Owner technician isAvailable toggle kore
+app.patch('/api/services/:id/availability', verifyToken, verifyTechnician, async (req, res) => {
+  try {
+    const service = await Service.findById(req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+
+    // sudhu owner toggle korte parbe
+    if (service.technicianEmail !== req.user.email) {
+      return res.status(403).json({ message: 'Forbidden: You are not the owner of this service' });
+    }
+
+    service.isAvailable = !service.isAvailable;
+    await service.save();
+
+    res.json(service);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
 app.get('/', (req, res) => {
   res.send('MERN Backend Server is Running!');
 });
