@@ -20,6 +20,7 @@ mongoose
 // Services Schema & Model
 const serviceSchema = new mongoose.Schema({
   title: { type: String, required: true },
+  serviceImage: { type: String, default: '' },
   description: { type: String, default: '' },
   category: { type: String, default: '' },
   serviceMode: { type: String, default: '' },
@@ -33,6 +34,25 @@ const serviceSchema = new mongoose.Schema({
 
 const Service = mongoose.model('Service', serviceSchema);
 
+// Booking Schema & Model
+const bookingSchema = new mongoose.Schema({
+  customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  customerEmail: { type: String, required: true },
+  service: { type: mongoose.Schema.Types.ObjectId, ref: 'Service', required: true },
+  serviceTitle: { type: String, required: true },
+  serviceImage: { type: String, default: '' },
+  category: { type: String, default: '' },
+  basePrice: { type: Number, required: true },
+  technicianName: { type: String, required: true },
+  technicianEmail: { type: String, required: true },
+  status: { type: String, default: 'requested' },
+  paymentStatus: { type: String, default: 'unpaid' },
+  finalAmount: { type: Number, required: true },
+  createdAt: { type: Date, default: Date.now },
+});
+
+const Booking = mongoose.model('Booking', bookingSchema);
+
 // @route   POST /api/services
 // @desc    Technician create service kore -> approvalStatus pending
 app.post('/api/services', verifyToken, verifyTechnician, async (req, res) => {
@@ -40,11 +60,60 @@ app.post('/api/services', verifyToken, verifyTechnician, async (req, res) => {
     const service = await Service.create({
       technicianName: req.user.name || req.user.email,
       technicianEmail: req.user.email,
+      serviceImage: req.body.serviceImage || '',
       approvalStatus: 'pending',
       isAvailable: true,
       createdAt: new Date(),
     });
     res.status(201).json(service);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   POST /api/bookings
+// @desc    Customer create booking -> status requested, payment unpaid, finalAmount = basePrice
+app.post('/api/bookings', verifyToken, verifyCustomer, async (req, res) => {
+  try {
+    const { serviceId } = req.body;
+
+    const service = await Service.findById(serviceId);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+
+    // approved + available service theke book kore dekhbe
+    if (service.approvalStatus !== 'approved' || !service.isAvailable) {
+      return res.status(400).json({ message: 'This service is not available for booking' });
+    }
+
+    // same customer er same service e active request ache -> 400
+    const existingBooking = await Booking.findOne({
+      customerEmail: req.user.email,
+      service: service._id,
+      status: { $in: ['requested', 'accepted', 'in-progress'] },
+    });
+
+    if (existingBooking) {
+      return res.status(400).json({ message: 'You already have an active request for this service' });
+    }
+
+    const booking = await Booking.create({
+      customer: req.user.id,
+      customerEmail: req.user.email,
+      service: service._id,
+      serviceTitle: service.title,
+      serviceImage: service.serviceImage,
+      category: service.category,
+      basePrice: service.price,
+      technicianName: service.technicianName,
+      technicianEmail: service.technicianEmail,
+      status: 'requested',
+      paymentStatus: 'unpaid',
+      finalAmount: service.price,
+    });
+
+    res.status(201).json(booking);
   } catch (err) {
     res.status(500).json({ message: 'Server error', error: err.message });
   }
