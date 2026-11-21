@@ -119,6 +119,54 @@ app.post('/api/bookings', verifyToken, verifyCustomer, async (req, res) => {
   }
 });
 
+// @route   GET /api/bookings/my
+// @desc    Customer er nijer bookings (verifyToken + verifyCustomer)
+app.get('/api/bookings/my', verifyToken, verifyCustomer, async (req, res) => {
+  try {
+    const bookings = await Booking.find({ customerEmail: req.user.email }).sort({ createdAt: -1 });
+    res.json(bookings);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   GET /api/bookings/technician
+// @desc    Technician er nijer bookings (verifyToken + verifyTechnician)
+app.get('/api/bookings/technician', verifyToken, verifyTechnician, async (req, res) => {
+  try {
+    const bookings = await Booking.find({ technicianEmail: req.user.email }).sort({ createdAt: -1 });
+    res.json(bookings);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   GET /api/bookings/:id
+// @desc    Owner (customer / technician) ba admin chara dekhte parbe na
+app.get('/api/bookings/:id', verifyToken, async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    // admin access
+    if (req.user.role === 'admin') {
+      return res.json(booking);
+    }
+
+    // owner access: customer ba technician
+    if (req.user.email === booking.customerEmail || req.user.email === booking.technicianEmail) {
+      return res.json(booking);
+    }
+
+    // owner customer / owner technician / admin chara ki -> 403
+    return res.status(403).json({ message: 'Forbidden: You are not allowed to access this booking' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
 // @route   GET /api/services
 // @desc    Public -> filtering + pagination (approvalStatus approved + isAvailable true)
 app.get('/api/services', async (req, res) => {
