@@ -54,6 +54,15 @@ const bookingSchema = new mongoose.Schema({
 
 const Booking = mongoose.model('Booking', bookingSchema);
 
+// User Schema & Model
+const userSchema = new mongoose.Schema({
+  name: { type: String, default: '' },
+  email: { type: String, required: true, unique: true },
+  role: { type: String, enum: ['customer', 'technician', 'admin'], default: 'customer' },
+});
+
+const User = mongoose.model('User', userSchema);
+
 // Payment Schema & Model
 const paymentSchema = new mongoose.Schema({
   bookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Booking', required: true },
@@ -392,6 +401,93 @@ app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), asy
   }
 
   res.json({ received: true });
+});
+
+// @route   GET /api/admin/users
+// @desc    Admin: sob user
+app.get('/api/admin/users', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const users = await User.find({});
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   PATCH /api/admin/users/:id/role
+// @desc    Admin: user er role change (customer / technician / admin)
+app.patch('/api/admin/users/:id/role', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const { role } = req.body;
+
+    if (!['customer', 'technician', 'admin'].includes(role)) {
+      return res.status(400).json({ message: 'Invalid role' });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    user.role = role;
+    await user.save();
+
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   PATCH /api/admin/services/:id/approval
+// @desc    Admin: service approval (approved / rejected)
+app.patch('/api/admin/services/:id/approval', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const { approvalStatus } = req.body;
+
+    if (approvalStatus !== 'approved' && approvalStatus !== 'rejected') {
+      return res.status(400).json({ message: 'Invalid approval status' });
+    }
+
+    const service = await Service.findById(req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+
+    service.approvalStatus = approvalStatus;
+    await service.save();
+
+    res.json(service);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   GET /api/admin/bookings
+// @desc    Admin: sob booking
+app.get('/api/admin/bookings', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const bookings = await Booking.find({}).sort({ createdAt: -1 });
+    res.json(bookings);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   GET /api/admin/payments
+// @desc    Admin: sob payment + total revenue
+app.get('/api/admin/payments', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const payments = await Payment.find({}).sort({ paidAt: -1 });
+
+    const totalRevenue = payments.reduce(
+      (sum, p) => sum + (p.paymentStatus === 'paid' ? p.amount : 0),
+      0
+    );
+
+    res.json({ payments, totalRevenue });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
 });
 
 // @route   GET /api/services
