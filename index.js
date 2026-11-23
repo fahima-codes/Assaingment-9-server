@@ -1,3 +1,4 @@
+// FixMate Backend Server
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -17,12 +18,10 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-const mongoURI = `mongodb://${encodeURIComponent(process.env.DB_USER)}:${encodeURIComponent(process.env.DB_PASS)}@ac-nbsuiui-shard-00-00.1eul2tk.mongodb.net:27017,ac-nbsuiui-shard-00-01.1eul2tk.mongodb.net:27017,ac-nbsuiui-shard-00-02.1eul2tk.mongodb.net:27017/${process.env.DB_NAME || 'assaingment-9'}?ssl=true&replicaSet=atlas-22ujl6-shard-0&authSource=admin&retryWrites=true&w=majority`;
-
 mongoose
-  .connect(mongoURI)
+  .connect(process.env.MONGODB_URI)
   .then(() => console.log('MongoDB Connected Successfully!'))
-  .catch(err => console.log('MongoDB Connection Error:', err));
+  .catch((err) => console.log('MongoDB Connection Error:', err));
 
 // Services Schema & Model
 const serviceSchema = new mongoose.Schema({
@@ -52,7 +51,12 @@ const bookingSchema = new mongoose.Schema({
     ref: 'User',
     required: true,
   },
+  customerName: { type: String, default: '' },
   customerEmail: { type: String, required: true },
+  phone: { type: String, default: '' },
+  address: { type: String, default: '' },
+  preferredDate: { type: Date },
+  problem: { type: String, default: '' },
   service: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Service',
@@ -91,7 +95,7 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model('User', userSchema);
 
 // JWT token: { id, email, name, role } -> verifyToken e booking middlewares use
-const generateToken = (user) =>
+const generateToken = user =>
   jwt.sign(
     { id: user._id, email: user.email, name: user.name, role: user.role },
     process.env.JWT_SECRET,
@@ -127,19 +131,26 @@ app.post('/api/auth/register', async (req, res) => {
     const { name, email, password, role } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
+      return res
+        .status(400)
+        .json({ message: 'Email and password are required' });
     }
 
-    const existingUser = await User.findOne({ email });
+    const cleanEmail = String(email).toLowerCase().trim();
+    const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) {
-      return res.status(400).json({ message: 'User already exists with this email' });
+      return res
+        .status(400)
+        .json({ message: 'User already exists with this email' });
     }
 
     const newUser = await User.create({
-      name: name || email.split('@')[0],
-      email,
+      name: name || cleanEmail.split('@')[0],
+      email: cleanEmail,
       password,
-      role: ['customer', 'technician', 'admin'].includes(role) ? role : 'customer',
+      role: ['customer', 'technician'].includes(role)
+        ? role
+        : 'customer',
     });
 
     const token = generateToken(newUser);
@@ -159,10 +170,13 @@ app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
+      return res
+        .status(400)
+        .json({ message: 'Email and password are required' });
     }
 
-    const user = await User.findOne({ email });
+    const cleanEmail = String(email).toLowerCase().trim();
+    const user = await User.findOne({ email: cleanEmail });
     if (!user || user.password !== password) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
@@ -181,17 +195,50 @@ app.post('/api/auth/login', async (req, res) => {
 // @desc    Technician create service kore -> approvalStatus pending
 app.post('/api/services', verifyToken, verifyTechnician, async (req, res) => {
   try {
+    const title =
+      typeof req.body.title === 'string' ? req.body.title.trim() : '';
+    const price = Number(req.body.price);
+
+    if (!title) {
+      return res.status(400).json({ message: 'Service title is required' });
+    }
+    if (req.body.price === '' || !Number.isFinite(price) || price <= 0) {
+      return res.status(400).json({ message: 'Price must be greater than 0' });
+    }
+
+    const stringFields = [
+      'serviceImage',
+      'description',
+      'category',
+      'serviceMode',
+      'duration',
+      'technicianArea',
+      'serviceArea',
+    ];
+    if (
+      stringFields.some(
+        field =>
+          req.body[field] !== undefined && typeof req.body[field] !== 'string',
+      )
+    ) {
+      return res
+        .status(400)
+        .json({ message: 'Service fields must be strings' });
+    }
+
     const service = await Service.create({
-      technicianName: req.body.technicianName || req.user.name || req.user.email,
+      title,
+      technicianName: req.user.name || req.user.email,
       technicianEmail: req.user.email,
       serviceImage: req.body.serviceImage || '',
       description: req.body.description || '',
       category: req.body.category || '',
       serviceMode: req.body.serviceMode || '',
-      price: req.body.price || 0,
+      price,
       duration: req.body.duration || '',
       technicianPhoto: req.body.technicianPhoto || '',
-      technicianArea: req.body.technicianArea || req.user.area || '',
+      technicianArea:
+        req.body.serviceArea || req.body.technicianArea || req.user.area || '',
       technicianBio: req.body.technicianBio || req.user.bio || '',
       approvalStatus: 'pending',
       isAvailable: true,
@@ -203,11 +250,61 @@ app.post('/api/services', verifyToken, verifyTechnician, async (req, res) => {
   }
 });
 
+// @route   GET /api/services/my
+// @desc    Technician: own services
+app.get('/api/services/my', verifyToken, verifyTechnician, async (req, res) => {
+  try {
+    const services = await Service.find({
+      technicianEmail: req.user.email,
+    }).sort({
+      createdAt: -1,
+    });
+    res.json({ services });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   GET /api/technician/dashboard
+// @desc    Technician: overview counts
+app.get(
+  '/api/technician/dashboard',
+  verifyToken,
+  verifyTechnician,
+  async (req, res) => {
+    try {
+      const [totalServices, approvedServices, pendingRequests] =
+        await Promise.all([
+          Service.countDocuments({ technicianEmail: req.user.email }),
+          Service.countDocuments({
+            technicianEmail: req.user.email,
+            approvalStatus: 'approved',
+          }),
+          Booking.countDocuments({
+            technicianEmail: req.user.email,
+            status: 'requested',
+          }),
+        ]);
+
+      res.json({ totalServices, approvedServices, pendingRequests });
+    } catch (err) {
+      res.status(500).json({ message: 'Server error', error: err.message });
+    }
+  },
+);
+
 // @route   POST /api/bookings
 // @desc    Customer create booking -> status requested, payment unpaid, finalAmount = basePrice
 app.post('/api/bookings', verifyToken, verifyCustomer, async (req, res) => {
   try {
     const { serviceId } = req.body;
+    const preferredDate = req.body.preferredDate
+      ? new Date(req.body.preferredDate)
+      : undefined;
+
+    if (preferredDate && Number.isNaN(preferredDate.getTime())) {
+      return res.status(400).json({ message: 'Preferred date is invalid' });
+    }
 
     const service = await Service.findById(serviceId);
     if (!service) {
@@ -229,16 +326,21 @@ app.post('/api/bookings', verifyToken, verifyCustomer, async (req, res) => {
     });
 
     if (existingBooking) {
-      return res
-        .status(400)
-        .json({
-          message: 'You already have an active request for this service',
-        });
+      return res.status(400).json({
+        message: 'You already have an active request for this service',
+      });
     }
 
     const booking = await Booking.create({
       customer: req.user.id,
+      customerName: req.user.name || '',
       customerEmail: req.user.email,
+      phone: typeof req.body.phone === 'string' ? req.body.phone.trim() : '',
+      address:
+        typeof req.body.address === 'string' ? req.body.address.trim() : '',
+      preferredDate,
+      problem:
+        typeof req.body.problem === 'string' ? req.body.problem.trim() : '',
       service: service._id,
       serviceTitle: service.title,
       serviceImage: service.serviceImage,
@@ -311,11 +413,9 @@ app.get('/api/bookings/:id', verifyToken, async (req, res) => {
     }
 
     // owner customer / owner technician / admin chara ki -> 403
-    return res
-      .status(403)
-      .json({
-        message: 'Forbidden: You are not allowed to access this booking',
-      });
+    return res.status(403).json({
+      message: 'Forbidden: You are not allowed to access this booking',
+    });
   } catch (err) {
     res.status(500).json({ message: 'Server error', error: err.message });
   }
@@ -336,20 +436,16 @@ app.patch(
 
       // sudhu owner customer cancel kore dekhbe
       if (booking.customerEmail !== req.user.email) {
-        return res
-          .status(403)
-          .json({
-            message: 'Forbidden: You are not the owner of this booking',
-          });
+        return res.status(403).json({
+          message: 'Forbidden: You are not the owner of this booking',
+        });
       }
 
       // status requested thakle e target
       if (booking.status !== 'requested') {
-        return res
-          .status(400)
-          .json({
-            message: 'Booking can only be cancelled when status is requested',
-          });
+        return res.status(400).json({
+          message: 'Booking can only be cancelled when status is requested',
+        });
       }
 
       booking.status = 'cancelled';
@@ -377,12 +473,10 @@ app.patch(
 
       // suddu owner technician update kore dekhbe
       if (booking.technicianEmail !== req.user.email) {
-        return res
-          .status(403)
-          .json({
-            message:
-              'Forbidden: You are not the owner technician of this booking',
-          });
+        return res.status(403).json({
+          message:
+            'Forbidden: You are not the owner technician of this booking',
+        });
       }
 
       const newStatus = req.body.status;
@@ -403,13 +497,17 @@ app.patch(
 
       // completed lagbe finalAmount > 0
       if (newStatus === 'completed') {
+        if (req.body.finalAmount !== undefined) {
+          const finalAmt = Number(req.body.finalAmount);
+          if (Number.isFinite(finalAmt) && finalAmt > 0) {
+            booking.finalAmount = finalAmt;
+          }
+        }
         if (!booking.finalAmount || booking.finalAmount <= 0) {
-          return res
-            .status(400)
-            .json({
-              message:
-                'finalAmount must be greater than 0 to complete the service',
-            });
+          return res.status(400).json({
+            message:
+              'finalAmount must be greater than 0 to complete the service',
+          });
         }
       }
 
@@ -448,11 +546,9 @@ app.post(
         return res.status(400).json({ message: 'Payment already processed' });
       }
       if (booking.customerEmail !== req.user.email) {
-        return res
-          .status(403)
-          .json({
-            message: 'Forbidden: You are not the owner of this booking',
-          });
+        return res.status(403).json({
+          message: 'Forbidden: You are not the owner of this booking',
+        });
       }
 
       // Stripe Checkout Session
@@ -497,7 +593,17 @@ app.get(
     try {
       const { session_id } = req.query;
 
+      if (!session_id) {
+        return res.status(400).json({ message: 'Payment session is required' });
+      }
+
       const session = await stripe.checkout.sessions.retrieve(session_id);
+
+      if (session.metadata.customerEmail !== req.user.email) {
+        return res
+          .status(403)
+          .json({ message: 'You cannot verify this payment' });
+      }
 
       if (session.payment_status === 'paid') {
         const existingPayment = await Payment.findOne({
@@ -506,6 +612,9 @@ app.get(
 
         if (!existingPayment) {
           const booking = await Booking.findById(session.metadata.bookingId);
+          if (!booking || booking.customerEmail !== req.user.email) {
+            return res.status(404).json({ message: 'Booking not found' });
+          }
 
           const payment = await Payment.create({
             bookingId: booking._id,
@@ -619,6 +728,16 @@ app.patch(
         return res.status(404).json({ message: 'User not found' });
       }
 
+      // Admin cannot change their own role
+      if (
+        user._id.toString() === req.user.id ||
+        user.email.toLowerCase() === req.user.email.toLowerCase()
+      ) {
+        return res
+          .status(400)
+          .json({ message: 'Admin cannot change their own role' });
+      }
+
       user.role = role;
       await user.save();
 
@@ -628,6 +747,65 @@ app.patch(
     }
   },
 );
+
+// @route   GET /api/admin/dashboard
+// @desc    Admin: platform overview stats
+app.get('/api/admin/dashboard', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const [
+      totalUsers,
+      totalTechnicians,
+      totalCustomers,
+      pendingServices,
+      approvedServices,
+      totalBookings,
+      payments,
+    ] = await Promise.all([
+      User.countDocuments({}),
+      User.countDocuments({ role: 'technician' }),
+      User.countDocuments({ role: 'customer' }),
+      Service.countDocuments({ approvalStatus: 'pending' }),
+      Service.countDocuments({ approvalStatus: 'approved' }),
+      Booking.countDocuments({}),
+      Payment.find({ paymentStatus: 'paid' }),
+    ]);
+
+    const totalRevenue = payments.reduce(
+      (sum, p) => sum + (p.amount || 0),
+      0,
+    );
+
+    res.json({
+      totalUsers,
+      totalTechnicians,
+      totalCustomers,
+      pendingServices,
+      approvedServices,
+      totalBookings,
+      totalRevenue,
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   GET /api/admin/services
+// @desc    Admin: get all services with optional status filter
+app.get('/api/admin/services', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const filter = {};
+    if (
+      req.query.status &&
+      ['pending', 'approved', 'rejected'].includes(req.query.status)
+    ) {
+      filter.approvalStatus = req.query.status;
+    }
+    const services = await Service.find(filter).sort({ createdAt: -1 });
+    res.json({ services });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
 
 // @route   PATCH /api/admin/services/:id/approval
 // @desc    Admin: service approval (approved / rejected)
@@ -681,6 +859,21 @@ app.get('/api/admin/payments', verifyToken, verifyAdmin, async (req, res) => {
     );
 
     res.json({ payments, totalRevenue });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// @route   GET /api/payments/my
+// @desc    Customer: own payments
+app.get('/api/payments/my', verifyToken, verifyCustomer, async (req, res) => {
+  try {
+    const payments = await Payment.find({ customerEmail: req.user.email }).sort(
+      {
+        paidAt: -1,
+      },
+    );
+    res.json({ payments });
   } catch (err) {
     res.status(500).json({ message: 'Server error', error: err.message });
   }
@@ -807,23 +1000,50 @@ app.patch(
 
       // sudhu owner edit korte parbe
       if (service.technicianEmail !== req.user.email) {
-        return res
-          .status(403)
-          .json({
-            message: 'Forbidden: You are not the owner of this service',
-          });
+        return res.status(403).json({
+          message: 'Forbidden: You are not the owner of this service',
+        });
       }
 
       const updateData = {};
-      if (req.body.title) updateData.title = req.body.title;
-      if (req.body.description) updateData.description = req.body.description;
-      if (req.body.category) updateData.category = req.body.category;
-      if (req.body.serviceMode) updateData.serviceMode = req.body.serviceMode;
-      if (req.body.price) updateData.price = req.body.price;
-      if (req.body.duration) updateData.duration = req.body.duration;
-      if (req.body.technicianPhoto) updateData.technicianPhoto = req.body.technicianPhoto;
-      if (req.body.technicianArea) updateData.technicianArea = req.body.technicianArea;
-      if (req.body.technicianBio) updateData.technicianBio = req.body.technicianBio;
+      const editableFields = {
+        title: 'title',
+        serviceImage: 'serviceImage',
+        description: 'description',
+        category: 'category',
+        serviceMode: 'serviceMode',
+        duration: 'duration',
+        serviceArea: 'technicianArea',
+        technicianArea: 'technicianArea',
+        technicianPhoto: 'technicianPhoto',
+        technicianBio: 'technicianBio',
+      };
+
+      for (const [field, modelField] of Object.entries(editableFields)) {
+        if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+          if (typeof req.body[field] !== 'string') {
+            return res
+              .status(400)
+              .json({ message: `${field} must be a string` });
+          }
+          if (field === 'title' && !req.body[field].trim()) {
+            return res
+              .status(400)
+              .json({ message: 'Service title is required' });
+          }
+          updateData[modelField] = req.body[field].trim();
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'price')) {
+        const price = Number(req.body.price);
+        if (req.body.price === '' || !Number.isFinite(price) || price <= 0) {
+          return res
+            .status(400)
+            .json({ message: 'Price must be greater than 0' });
+        }
+        updateData.price = price;
+      }
 
       // edit korele approval pending hoye jabe
       updateData.approvalStatus = 'pending';
@@ -831,7 +1051,7 @@ app.patch(
       const updatedService = await Service.findByIdAndUpdate(
         req.params.id,
         updateData,
-        { new: true },
+        { new: true, runValidators: true },
       );
       res.json(updatedService);
     } catch (err) {
@@ -855,11 +1075,9 @@ app.delete(
 
       // sudhu owner delete korte parbe
       if (service.technicianEmail !== req.user.email) {
-        return res
-          .status(403)
-          .json({
-            message: 'Forbidden: You are not the owner of this service',
-          });
+        return res.status(403).json({
+          message: 'Forbidden: You are not the owner of this service',
+        });
       }
 
       await Service.findByIdAndDelete(req.params.id);
@@ -885,11 +1103,9 @@ app.patch(
 
       // sudhu owner toggle korte parbe
       if (service.technicianEmail !== req.user.email) {
-        return res
-          .status(403)
-          .json({
-            message: 'Forbidden: You are not the owner of this service',
-          });
+        return res.status(403).json({
+          message: 'Forbidden: You are not the owner of this service',
+        });
       }
 
       service.isAvailable = !service.isAvailable;
