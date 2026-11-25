@@ -189,6 +189,43 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// @route   POST /api/auth/google
+// @desc    Google Social Login / Sign Up -> user gets 'customer' role by default -> returns token & user
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const { email, name, image } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: 'Google email is required' });
+    }
+
+    const cleanEmail = String(email).toLowerCase().trim();
+    let user = await User.findOne({ email: cleanEmail });
+
+    if (!user) {
+      // Per assignment requirement: a Google user gets the 'customer' role by default
+      user = await User.create({
+        name: name || cleanEmail.split('@')[0],
+        email: cleanEmail,
+        image:
+          image ||
+          `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(
+            name || cleanEmail,
+          )}`,
+        role: 'customer',
+        password: '',
+      });
+    }
+
+    const token = generateToken(user);
+    const userObject = user.toObject();
+    delete userObject.password;
+
+    res.status(200).json({ token, user: userObject });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
 // @route   POST /api/services
 // @desc    Technician create service kore -> approvalStatus pending
 app.post('/api/services', verifyToken, verifyTechnician, async (req, res) => {
